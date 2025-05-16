@@ -1,0 +1,63 @@
+import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+from surprise import SVD, Dataset, Reader
+from surprise.model_selection import train_test_split
+import warnings
+warnings.filterwarnings("ignore")
+
+# Load data
+movies = pd.read_csv('data/movies.csv')
+ratings = pd.read_csv('data/ratings.csv')
+
+# Preprocessing
+movies['genres'] = movies['genres'].fillna('').str.replace('|', ' ')
+ratings = ratings[ratings['rating'] > 0]
+
+# TF-IDF Vectorization for content-based filtering
+tfidf = TfidfVectorizer(stop_words='english')
+tfidf_matrix = tfidf.fit_transform(movies['genres'])
+
+# Compute cosine similarity
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+# Movie title to index
+indices = pd.Series(movies.index, index=movies['title']).drop_duplicates()
+
+# Content-Based Recommender
+def content_based_recommender(title, top_n=10):
+    idx = indices[title]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:top_n+1]
+    movie_indices = [i[0] for i in sim_scores]
+    return movies['title'].iloc[movie_indices]
+
+# Collaborative Filtering using SVD
+def train_svd_model():
+    reader = Reader(rating_scale=(0.5, 5.0))
+    data = Dataset.load_from_df(ratings[['userId', 'movieId', 'rating']], reader)
+    trainset, testset = train_test_split(data, test_size=0.2)
+    algo = SVD()
+    algo.fit(trainset)
+    return algo
+
+svd_model = train_svd_model()
+
+# Hybrid Recommendation
+def hybrid_recommender(user_id, title, top_n=10):
+    cb_movies = content_based_recommender(title, top_n=30)
+    movie_ids = movies[movies['title'].isin(cb_movies)].movieId
+    predictions = [(mid, svd_model.predict(user_id, mid).est) for mid in movie_ids]
+    predictions.sort(key=lambda x: x[1], reverse=True)
+    top_movies = [movies[movies.movieId == mid]['title'].values[0] for mid, _ in predictions[:top_n]]
+    return top_movies
+
+# Example Usage
+if __name__ == "__main__":
+    user_id = 10
+    movie_title = 'The Matrix'
+    print(f"\nRecommended movies for User {user_id} based on '{movie_title}':\n")
+    for movie in hybrid_recommender(user_id, movie_title):
+        print(f" - {movie}")
